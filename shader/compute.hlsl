@@ -1,9 +1,13 @@
-RWBuffer<int> srcBuffer: register(u0);
-RWBuffer<int> dstBuffer: register(u1);
+// Input buffers
+Buffer<float> A : register(t0);  // Input buffer A
+Buffer<float> B : register(t1);  // Input buffer B
 
-[numthreads(1, 1, 1)]
-void main(uint3 groupID : SV_GroupID, uint3 tid : SV_DispatchThreadID, uint3 localTID : SV_GroupThreadID, uint groupIndex : SV_GroupIndex)
+// Output buffer
+RWBuffer<float> output : register(u0); // Output UAV buffer
+
+[numthreads(1, 1, 1)] // Number of threads per thread group
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
-    const int index = tid.x;
-    dstBuffer[index] = 99;//srcBuffer[index] + 10;
+    uint idx = dispatchThreadID.x;  // Get the index of the element
+    output[idx] = A[idx] + B[idx]; // Add corresponding elements
 }
