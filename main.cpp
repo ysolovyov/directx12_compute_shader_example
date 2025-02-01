@@ -11,7 +11,7 @@ const char* shaderSource = R"(
     RWBuffer<float> output : register(u0); // Output UAV buffer
 
     [numthreads(1, 1, 1)] // Number of threads per thread group
-    void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
         uint idx = dispatchThreadID.x;  // Get the index of the element
         output[idx] = A[idx] + B[idx]; // Add corresponding elements
@@ -127,7 +127,7 @@ ComPtr<ID3DBlob> CompileShader()
     ComPtr<ID3DBlob> errorBlob;
 
     // HRESULT hr = D3DCompileFromFile(L"Shader.hlsl", nullptr, nullptr, "CSMain", "cs_5_0", 0, 0, &shaderBlob, &errorBlob);
-    HRESULT hr = D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "CSMain", "cs_5_0", 0, 0, &shaderBlob, &errorBlob);
+    HRESULT hr = D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &shaderBlob, &errorBlob);
     if (FAILED(hr))
     {
         if (errorBlob)
