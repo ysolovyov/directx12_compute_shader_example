@@ -33,7 +33,10 @@ FetchContent_Declare(
     URL_HASH SHA256=353D2D7F2ACEA5642689A1BA85213C1AC6816457038B54AC02158B893E0F389F
 )
 
-FetchContent_MakeAvailable(wil)
+FetchContent_GetProperties(wil)
+if(NOT wil_POPULATED)
+    FetchContent_Populate(wil)
+endif()
 
 add_library(wil INTERFACE)
 target_include_directories(wil INTERFACE "${wil_SOURCE_DIR}/include")
