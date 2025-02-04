@@ -2,230 +2,179 @@
 
 using Microsoft::WRL::ComPtr;
 
-const int numElements = 16;
-int inputData[numElements] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-int outputData[numElements];
+const char* shaderSource = R"(
+    RWBuffer<float> uavBuffer : register(u0);  // UAV (writeable buffer)
 
-// const char* shaderSource = R"(
-//     RWBuffer<int> srcBuffer: register(u0);
-//     RWBuffer<int> dstBuffer: register(u1);
-
-//     [numthreads(1, 1, 1)]
-//     void main(uint3 groupID : SV_GroupID, uint3 tid : SV_DispatchThreadID, uint3 localTID : SV_GroupThreadID, uint groupIndex : SV_GroupIndex)
-//     {
-//         const int index = tid.x;
-//         dstBuffer[index] = srcBuffer[index] + 10;
-//     }
-// )";
-
-// Global DirectX 12 objects
-ComPtr<ID3D12Device> pDevice;
-ComPtr<ID3D12CommandQueue> pCommandQueue;
-ComPtr<ID3D12CommandAllocator> pCommandAllocator;
-ComPtr<ID3D12GraphicsCommandList> pCommandList;
-ComPtr<ID3D12RootSignature> pRootSignature;
-ComPtr<ID3D12PipelineState> pPipelineState;
-ComPtr<ID3D12Resource> pInputBuffer;
-ComPtr<ID3D12Resource> pOutputBuffer;
-ComPtr<ID3D12DescriptorHeap> pUavHeap;
-
-void InitD3D() {
-    printf("InitD3D");
-
-#if defined(_DEBUG)
-    // Enable the D3D12 debug layer.
-    {
-        ComPtr<ID3D12Debug> debugController;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
-        {
-            debugController->EnableDebugLayer();
-        }
+    [numthreads(1, 1, 1)]
+    void main(uint3 DTid : SV_DispatchThreadID) {
+        // Write some data to the buffer
+        uavBuffer[DTid.x] = (float)DTid.x;
     }
-#endif
+)";
 
-    // Create D3D12 Device
-    THROW_IF_FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&pDevice)));
+int main()
+{
+    const UINT numElements = 16;
 
-    // Create Command Queue
-    D3D12_COMMAND_QUEUE_DESC cqDesc = {};
-    pDevice->CreateCommandQueue(&cqDesc, IID_PPV_ARGS(&pCommandQueue));
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> commandQueue;
+    ComPtr<ID3D12CommandAllocator> commandAllocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
 
-    // Create Command Allocator and Command List
-    pDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&pCommandAllocator));
-    pDevice->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, pCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&pCommandList));
-}
+    UINT64 fenceValue = 0;
+    ComPtr<ID3D12Fence> fence;
+    HANDLE eventHandle;
 
-// Create buffers
-void CreateBuffers() {
-    printf("CreateBuffers\n");
-    // Create input buffer
+    ComPtr<ID3D12RootSignature> rootSignature;
+    ComPtr<ID3D12PipelineState> computePSO;
+    ComPtr<ID3DBlob> shaderBlob;
+    ComPtr<ID3D12DescriptorHeap> uavHeap;
+    ComPtr<ID3D12Resource> stagingBuffer;
+    ComPtr<ID3D12Resource> uavBuffer;
+
+    // Create the device
+    THROW_IF_FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)));
+
+    // Create a command queue
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    THROW_IF_FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue)));
+
+    THROW_IF_FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&commandAllocator)));
+    THROW_IF_FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&commandList)));
+
+    // Create fence
+    THROW_IF_FAILED(device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+    // Create output buffer (UAV)
+    // Create a buffer to be used as a UAV
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
     D3D12_RESOURCE_DESC bufferDesc = {};
     bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    bufferDesc.Width = numElements * sizeof(int);
+    bufferDesc.Width = numElements * sizeof(float); // Total size of the buffer
     bufferDesc.Height = 1;
     bufferDesc.DepthOrArraySize = 1;
     bufferDesc.MipLevels = 1;
     bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
     bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.SampleDesc.Quality = 0;
+    bufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    bufferDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-    pDevice->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+    D3D12_RESOURCE_DESC stagingBufferDesc = {};
+    stagingBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    stagingBufferDesc.Width = sizeof(float) * numElements; // The size of the buffer.
+    stagingBufferDesc.Height = 1;
+    stagingBufferDesc.DepthOrArraySize = 1;
+    stagingBufferDesc.MipLevels = 1;
+    stagingBufferDesc.Format = DXGI_FORMAT_UNKNOWN;
+    stagingBufferDesc.SampleDesc.Count = 1;
+    stagingBufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12_HEAP_PROPERTIES stagingHeapProps = {};
+    stagingHeapProps.Type = D3D12_HEAP_TYPE_READBACK; // This is a readback buffer.
+    stagingHeapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    stagingHeapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+    THROW_IF_FAILED(device->CreateCommittedResource(
+        &stagingHeapProps,
         D3D12_HEAP_FLAG_NONE,
-        &bufferDesc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        &stagingBufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, // Initial state for copying
         nullptr,
-        IID_PPV_ARGS(&pInputBuffer));
+        IID_PPV_ARGS(&stagingBuffer)));
 
-    // Upload data to input buffer
-    // int* pData;
-    // pInputBuffer->Map(0, nullptr, reinterpret_cast<void**>(&pData));
-    // memcpy(pData, inputData, sizeof(inputData));
-    // pInputBuffer->Unmap(0, nullptr);
+    THROW_IF_FAILED(device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&uavBuffer)));
 
-    // Create output buffer
-    bufferDesc.Width = numElements * sizeof(int);
-    pDevice->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-        D3D12_HEAP_FLAG_NONE,
-        &bufferDesc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        nullptr,
-        IID_PPV_ARGS(&pOutputBuffer));
-}
+    D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {};
+    uavHeapDesc.NumDescriptors = 1; // We are creating one UAV
+    uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Must be visible to shaders
 
-void CreateRootSignature()
-{
-    printf("CreateRootSignature\n");
-    
-    CD3DX12_DESCRIPTOR_RANGE ranges[1];
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE);
-
-    CD3DX12_ROOT_PARAMETER rootParameters[1];
-    rootParameters[0].InitAsDescriptorTable(1, ranges, D3D12_SHADER_VISIBILITY_ALL);
-
-    CD3DX12_ROOT_SIGNATURE_DESC computeRootSignatureDesc;
-    computeRootSignatureDesc.Init(_countof(rootParameters), rootParameters, 0, nullptr);
-
-    ComPtr<ID3DBlob> signature;
-    ComPtr<ID3DBlob> error;
-
-    THROW_IF_FAILED(D3D12SerializeRootSignature(&computeRootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, signature.GetAddressOf(), nullptr));
-
-    THROW_IF_FAILED(pDevice->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&pRootSignature)));
-}
-
-void CreateHeap()
-{
-    printf("CreateHeap\n");
-    D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-
-    desc.NumDescriptors = 2;
-    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-    THROW_IF_FAILED(pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&pUavHeap)));
-}
-
-void CreateViews()
-{
-    printf("CreateViews\n");
-    UINT uav_descriptor_size = pDevice->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    THROW_IF_FAILED(device->CreateDescriptorHeap(&uavHeapDesc, IID_PPV_ARGS(&uavHeap)));
 
     D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN; // Buffer format
     uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
     uavDesc.Buffer.FirstElement = 0;
     uavDesc.Buffer.NumElements = numElements;
+    uavDesc.Buffer.StructureByteStride = sizeof(float);
     uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE uavHandle = pUavHeap->GetCPUDescriptorHandleForHeapStart();
+    CD3DX12_CPU_DESCRIPTOR_HANDLE uavHandle(uavHeap->GetCPUDescriptorHandleForHeapStart());
+    device->CreateUnorderedAccessView(uavBuffer.Get(), nullptr, &uavDesc, uavHandle);
 
-    pDevice->CreateUnorderedAccessView(pInputBuffer.Get(), nullptr, &uavDesc, uavHandle);
-    uavHandle.ptr += uav_descriptor_size;
-    pDevice->CreateUnorderedAccessView(pOutputBuffer.Get(), nullptr, &uavDesc, uavHandle);
-}
+    THROW_IF_FAILED(D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &shaderBlob, nullptr));
 
-void CreatePipelineState()
-{
-    printf("CreatePipelineState\n");
-    ComPtr<ID3DBlob> pCSBlob = nullptr;
-    //ComPtr<ID3DBlob> pErrorBlob = nullptr;
+    D3D12_ROOT_PARAMETER root_params[1] = {};
 
-    // THROW_IF_FAILED(D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, pCSBlob.GetAddressOf(), pErrorBlob.GetAddressOf()));
+    D3D12_DESCRIPTOR_RANGE desc_range = {};
+    desc_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    desc_range.NumDescriptors = 1;
+    desc_range.BaseShaderRegister = 0; // u0
 
-    THROW_IF_FAILED(D3DReadFileToBlob(L"compute.cso", &pCSBlob));
+    root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    root_params[0].DescriptorTable.NumDescriptorRanges = 1;
+    root_params[0].DescriptorTable.pDescriptorRanges = &desc_range;
 
-    // Create compute pipeline state
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = 1;
+    root_sig_desc.pParameters = root_params;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> rootSignatureBlob;
+    THROW_IF_FAILED(D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSignatureBlob, nullptr));
+    THROW_IF_FAILED(device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature)));
+
     D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.pRootSignature = pRootSignature.Get();
-    psoDesc.CS = CD3DX12_SHADER_BYTECODE(pCSBlob.Get());
+    psoDesc.pRootSignature = rootSignature.Get();
+    psoDesc.CS = { shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize() };
 
-    THROW_IF_FAILED(pDevice->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&pPipelineState)));
-}
+    THROW_IF_FAILED(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&computePSO)));
 
-void DispatchComputeShader() {
-    printf("DispatchComputeShader\n");
+    ID3D12DescriptorHeap* heaps[] = { uavHeap.Get() };
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetPipelineState(computePSO.Get());
+    commandList->SetComputeRootSignature(rootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(0, uavHeap->GetGPUDescriptorHandleForHeapStart());
 
-    // Set descriptor heaps for SRV and UAV
-    ID3D12DescriptorHeap* ppHeaps[] = { pUavHeap.Get() };
-    printf("SetDescriptorHeaps\n");
-    pCommandList->SetDescriptorHeaps(ARRAYSIZE(ppHeaps), ppHeaps);
+    commandList->Dispatch(numElements, 1, 1);
 
-    // Step 16: Set up Command List
-    printf("SetComputeRootSignature\n");
-    pCommandList->SetComputeRootSignature(pRootSignature.Get());
-    printf("SetPipelineState\n");
-    pCommandList->SetPipelineState(pPipelineState.Get());
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(uavBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE));
+    commandList->CopyResource(stagingBuffer.Get(), uavBuffer.Get());
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(uavBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
 
-    // Set UAV
-    printf("SetComputeRootDescriptorTable\n");
-    pCommandList->SetComputeRootDescriptorTable(0, pUavHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->Close();
 
-    printf("Dispatch\n");
-    // Dispatch compute shader
-    pCommandList->Dispatch(numElements, 1, 1);
+    ID3D12CommandList* pCommandLists[] = { commandList.Get() };
+    commandQueue->ExecuteCommandLists(ARRAYSIZE(pCommandLists), pCommandLists);
 
-    printf("Close");
-    // Step 17: Close Command List and Execute
-    pCommandList->Close();
+    commandQueue->Signal(fence.Get(), ++fenceValue);
 
-    // Execute Command List
-    ID3D12CommandList* ppCommandLists[] = { pCommandList.Get() };
-    printf("ExecuteCommandLists\n");
-    pCommandQueue->ExecuteCommandLists(ARRAYSIZE(ppCommandLists), ppCommandLists);
-}
-
-void RetrieveResults() {
-    // Map output buffer 1 to read back results
-    pOutputBuffer->Map(0, nullptr, reinterpret_cast<void**>(&outputData));
-
-    printf("RetrieveResults\n");
-
-    for (int i = 0; i < numElements; ++i) {
-        printf("Output: %d\n", outputData[i]);
+    // Check if the fence has already been signaled.
+    if (fence->GetCompletedValue() < fenceValue) {
+        // Wait for the fence to reach the signal value before proceeding
+        HANDLE eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        fence->SetEventOnCompletion(fenceValue, eventHandle);
+        WaitForSingleObject(eventHandle, INFINITE);
+        CloseHandle(eventHandle);
     }
 
-    pOutputBuffer->Unmap(0, nullptr);
-}
-
-int main() {
-    try {
-        InitD3D();
-        CreateBuffers();
-        CreateRootSignature();
-        CreateHeap();
-        CreateViews();
-        CreatePipelineState();
-        DispatchComputeShader();
-        RetrieveResults();
-    } catch (std::exception& e) {
-        printf("Error: %s\n", e.what());
-    } catch (...) {
-        printf("Unknown error");
+    // Map the staging buffer and read the data
+    float* data = nullptr;
+    stagingBuffer->Map(0, nullptr, reinterpret_cast<void**>(&data));
+    for (size_t i = 0; i < numElements; ++i) {
+        std::cout << "Result[" << i << "] = " << data[i] << std::endl;
     }
+    stagingBuffer->Unmap(0, nullptr);
 
     return 0;
 }

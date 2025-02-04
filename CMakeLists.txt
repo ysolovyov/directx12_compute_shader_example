@@ -56,34 +56,6 @@ add_library(dxheaders INTERFACE)
 target_include_directories(dxheaders INTERFACE ${dxheaders_SOURCE_DIR}/include/directx)
 target_link_libraries(dxheaders INTERFACE Microsoft::DirectX-Guids)
 
-# compile shaders
-add_custom_target(shaders)
-file(GLOB SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shader/*.hlsl")
-
-FetchContent_Declare(dxc
-    URL https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2207/dxc_2022_07_18.zip
-)
-FetchContent_MakeAvailable(dxc)
-
-foreach(FILE ${SHADER})
-    get_filename_component(FILE_WE ${FILE} NAME_WE)
-    add_custom_command(TARGET shaders
-        COMMAND ${dxc_SOURCE_DIR}/bin/x64/dxc.exe -T cs_6_6 -O3 ${FILE} -Fo shader/${FILE_WE}.cso
-        MAIN_DEPENDENCY ${FILE}
-        COMMENT "HLSL ${FILE}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        VERBATIM)
-endforeach(FILE)
-
 add_executable(dx12_compute_shader_example main.cpp)
-add_dependencies(dx12_compute_shader_example shaders)
 target_precompile_headers(dx12_compute_shader_example PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/pch.h")
 target_link_libraries(dx12_compute_shader_example wil d3d12 dxcore dxheaders d3dcompiler)
-
-file(GLOB SHADER_CSO "${CMAKE_CURRENT_SOURCE_DIR}/shader/*.cso")
-list(LENGTH SHADER_CSO RES_LEN)
-if(RES_LEN GREATER 0)
-    add_custom_command(TARGET dx12_compute_shader_example PRE_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        ${SHADER_CSO} $<TARGET_FILE_DIR:dx12_compute_shader_example>)
-endif()
