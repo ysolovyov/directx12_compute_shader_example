@@ -1,9 +1,14 @@
 ﻿#pragma once
 
-#include <d3d12.h>
-#include <d3dcompiler.h>
-#include <wrl.h>
+#define NOMINMAX
+
+#include <wil/resource.h>
+
+#include <chrono>
 #include <iostream>
-#include <vector>
-#include <assert.h>
-#include <Windows.h>
+
+#include <d3dx12.h>
+#include <dxgi1_4.h>
+#define IID_GRAPHICS_PPV_ARGS IID_PPV_ARGS
+
+#include <d3dcompiler.h>
