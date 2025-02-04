@@ -8,7 +8,7 @@ const char* shaderSource = R"(
     [numthreads(1, 1, 1)]
     void main(uint3 DTid : SV_DispatchThreadID) {
         // Write some data to the buffer
-        uavBuffer[DTid.x] = (float)DTid.x;
+        uavBuffer[DTid.x] = sqrt((float)DTid.x);
     }
 )";
 
@@ -41,11 +41,13 @@ int main()
     queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
     THROW_IF_FAILED(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue)));
 
+    // Create command list
     THROW_IF_FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&commandAllocator)));
     THROW_IF_FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&commandList)));
 
     // Create fence
     THROW_IF_FAILED(device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+    eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
     // Create output buffer (UAV)
     // Create a buffer to be used as a UAV
@@ -66,6 +68,15 @@ int main()
     bufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
+    THROW_IF_FAILED(device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr, 
+        IID_PPV_ARGS(&uavBuffer)));
+
+    // Create staging buffer
     D3D12_RESOURCE_DESC stagingBufferDesc = {};
     stagingBufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
     stagingBufferDesc.Width = sizeof(float) * numElements; // The size of the buffer.
@@ -89,10 +100,6 @@ int main()
         nullptr,
         IID_PPV_ARGS(&stagingBuffer)));
 
-    THROW_IF_FAILED(device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&uavBuffer)));
-
     D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {};
     uavHeapDesc.NumDescriptors = 1; // We are creating one UAV
     uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -113,25 +120,25 @@ int main()
 
     THROW_IF_FAILED(D3DCompile(shaderSource, strlen(shaderSource), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &shaderBlob, nullptr));
 
-    D3D12_ROOT_PARAMETER root_params[1] = {};
+    D3D12_ROOT_PARAMETER rootParams[1] = {};
 
-    D3D12_DESCRIPTOR_RANGE desc_range = {};
-    desc_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    desc_range.NumDescriptors = 1;
-    desc_range.BaseShaderRegister = 0; // u0
+    D3D12_DESCRIPTOR_RANGE descRange = {};
+    descRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    descRange.NumDescriptors = 1;
+    descRange.BaseShaderRegister = 0; // u0
 
-    root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    root_params[0].DescriptorTable.NumDescriptorRanges = 1;
-    root_params[0].DescriptorTable.pDescriptorRanges = &desc_range;
+    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[0].DescriptorTable.pDescriptorRanges = &descRange;
 
-    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
-    root_sig_desc.NumParameters = 1;
-    root_sig_desc.pParameters = root_params;
-    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+    rootSigDesc.NumParameters = 1;
+    rootSigDesc.pParameters = rootParams;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     ComPtr<ID3DBlob> rootSignatureBlob;
-    THROW_IF_FAILED(D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSignatureBlob, nullptr));
+    THROW_IF_FAILED(D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSignatureBlob, nullptr));
     THROW_IF_FAILED(device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature)));
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
@@ -154,27 +161,24 @@ int main()
 
     commandList->Close();
 
-    ID3D12CommandList* pCommandLists[] = { commandList.Get() };
-    commandQueue->ExecuteCommandLists(ARRAYSIZE(pCommandLists), pCommandLists);
+    ID3D12CommandList* commandLists[] = { commandList.Get() };
+    commandQueue->ExecuteCommandLists(ARRAYSIZE(commandLists), commandLists);
 
     commandQueue->Signal(fence.Get(), ++fenceValue);
 
-    // Check if the fence has already been signaled.
-    if (fence->GetCompletedValue() < fenceValue) {
-        // Wait for the fence to reach the signal value before proceeding
-        HANDLE eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        fence->SetEventOnCompletion(fenceValue, eventHandle);
-        WaitForSingleObject(eventHandle, INFINITE);
-        CloseHandle(eventHandle);
-    }
+    // Wait for the fence to reach the signal value before proceeding
+    fence->SetEventOnCompletion(fenceValue, eventHandle);
+    WaitForSingleObject(eventHandle, INFINITE);
 
     // Map the staging buffer and read the data
     float* data = nullptr;
     stagingBuffer->Map(0, nullptr, reinterpret_cast<void**>(&data));
     for (size_t i = 0; i < numElements; ++i) {
-        std::cout << "Result[" << i << "] = " << data[i] << std::endl;
+        std::cout << "data[" << i << "] = " << data[i] << std::endl;
     }
     stagingBuffer->Unmap(0, nullptr);
+
+    CloseHandle(eventHandle);
 
     return 0;
 }
