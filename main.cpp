@@ -3,7 +3,7 @@
 using Microsoft::WRL::ComPtr;
 
 const char* shaderSource = R"(
-    RWBuffer<float> uavBuffer : register(u0);  // UAV (writeable buffer)
+    RWBuffer<float> uavBuffer : register(u0);  // UAV (writable buffer)
 
     [numthreads(1, 1, 1)]
     void main(uint3 DTid : SV_DispatchThreadID) {
@@ -49,7 +49,6 @@ int main()
     THROW_IF_FAILED(device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
     eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-    // Create output buffer (UAV)
     // Create a buffer to be used as a UAV
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
