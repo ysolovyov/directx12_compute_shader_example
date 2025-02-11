@@ -140,7 +140,7 @@ int main()
         IID_PPV_ARGS(&stagingBuffer)));
 
     D3D12_DESCRIPTOR_HEAP_DESC uavHeapDesc = {};
-    uavHeapDesc.NumDescriptors = 2; // We are creating one UAV
+    uavHeapDesc.NumDescriptors = 2;
     uavHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     uavHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Must be visible to shaders
 
