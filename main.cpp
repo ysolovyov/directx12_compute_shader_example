@@ -10,7 +10,6 @@ const char* shaderSource = R"(
     void main(uint3 blockID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
         uint x = blockID.x * 32 + threadID.x;
         dst[x] = sqrt(src[x]);
-        
     }
 )";
 
