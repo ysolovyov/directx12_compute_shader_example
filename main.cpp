@@ -120,7 +120,7 @@ int main()
     float* src = nullptr;
     uploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&src));
     for (size_t i = 0; i < numElements; ++i) {
-        src[i] = (float)i*i;
+        src[i] = (float)i;
     }
     uploadBuffer->Unmap(0, nullptr);
 
