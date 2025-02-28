@@ -1,4 +1,4 @@
-# dx12_compute_shader
+# dx12_compute_shader_example
 
 DirectX 12 compute shader sample command line app
 
